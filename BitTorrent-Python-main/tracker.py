@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 from urllib.parse import urlparse, parse_qs
 from utils import *
-from messages.message import  Message
+from messages.message import Message
 from messages.tracker2node import Tracker2Node
 from configs import CFG, Config
 config = Config.from_json(CFG)
@@ -23,20 +23,23 @@ class TrackerHTTPHandler(BaseHTTPRequestHandler):
             content_length = int(self.headers['Content-Length'])
             post_data = self.rfile.read(content_length)
             data = json.loads(post_data.decode('utf-8'))
-
+            msg= data['message']
+            addr=data['address']
+            msg = Message.decode(msg)
             response_data = {'status': 'error', 'message': 'Unknown endpoint'}
 
             if self.path == "/register":
-                response_data = self.server.tracker.register_node(data)
+                response_data = self.server.tracker.has_informed_tracker[(msg['node_id'], addr)] = True
             elif self.path == "/own":
-                response_data = self.server.tracker.handle_own_request(data)
-            elif self.path == "/need":
-                response_data = self.server.tracker.handle_need_request(data)
+                response_data = self.server.tracker.add_file_owner(msg=msg, addr=addr)
+            elif self.path == "/need": # need to send back to the client
+                response_data = self.server.tracker.search_file(msg=msg, addr=addr)
             elif self.path == "/update":
-                response_data = self.server.tracker.update_node_status(data)
+                response_data = self.server.tracker.update_db(msg=msg)
             elif self.path == "/exit":
-                response_data = self.server.tracker.handle_exit_request(data)
-
+                response_data = self.server.tracker.remove_node(node_id=msg['node_id'], addr=addr)
+                log_content = f"Node {msg['node_id']} exited torrent intentionally."
+                log(node_id=0, content=log_content, is_tracker=True)
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
@@ -95,9 +98,10 @@ class Tracker:
                                         search_result=matched_entries,
                                         filename=msg['filename'])
 
+
         self.send_segment(sock=self.tracker_socket,
-                          data=tracker_response.encode(),
-                          addr=addr)
+                        data=tracker_response.encode(),
+                       addr=addr)
 
     def remove_node(self, node_id: int, addr: tuple):
         entry = {

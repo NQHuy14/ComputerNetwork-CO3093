@@ -46,7 +46,7 @@ class Node:
                              data=data)
         encrypted_data=segment.data
 
-        self.communicate_with_tracker(encrypted_data,addr,endPoint)
+        response=self.communicate_with_tracker(encrypted_data,addr,endPoint)
 
 
 
@@ -122,6 +122,7 @@ class Node:
                           data=Message.encode(msg),
                           addr=tuple(config.constants.TRACKER_ADDR))
 
+        communicate_with_tracker(sock=temp_sock,  data=Message.encode(msg), addr=tuple(config.constants.TRACKER_ADDR),endPoint="update")
         free_socket(temp_sock)
 
     def handle_requests(self, msg: dict, addr: tuple):
@@ -150,10 +151,7 @@ class Node:
                                mode=config.tracker_requests_mode.OWN,
                                filename=filename)
 
-        self.send_segment(sock=self.send_socket,
-                          data=message.encode(),
-                          addr=tuple(config.constants.TRACKER_ADDR))
-
+        gatherDataForTracker(sock=self.send_socket,data=message.encode(),addr=tuple(config.constants.TRACKER_ADDR),endPoint="own")
         if self.is_in_send_mode:    # has been already in send(upload) mode
             log_content = f"Some other node also requested a file from you! But you are already in SEND(upload) mode!"
             log(node_id=self.node_id, content=log_content)
@@ -316,6 +314,7 @@ class Node:
         self.send_segment(sock=search_sock,
                           data=msg.encode(),
                           addr=tuple(config.constants.TRACKER_ADDR))
+        gatherDataForTracker(sock=search_sock, data=msg.encode(), addr=tuple(config.constants.TRACKER_ADDR),endPoint="need")
         # now we must wait for the tracker response
         while True:
             data, addr = search_sock.recvfrom(config.constants.BUFFER_SIZE)
@@ -336,9 +335,7 @@ class Node:
         msg = Node2Tracker(node_id=self.node_id,
                            mode=config.tracker_requests_mode.EXIT,
                            filename="")
-        self.send_segment(sock=self.send_socket,
-                          data=Message.encode(msg),
-                          addr=tuple(config.constants.TRACKER_ADDR))
+        communicate_with_tracker(sock=self.send_socket, data=Message.encode(msg), addr=tuple(config.constants.TRACKER_ADDR),endPoint="exit")
         free_socket(self.send_socket)
         free_socket(self.rcv_socket)
 
