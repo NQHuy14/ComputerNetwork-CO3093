@@ -13,10 +13,22 @@ from requests.exceptions import ConnectionError, HTTPError
 files = [] # This dictionary should contain piece index to data mapping
 pieces_have = [] # This list should contain the indexes of the pieces that the client has
 
+def reconnect_to_server(tracker_url, payload):
+    while True:
+        try:
+            response = requests.post(tracker_url, json=payload)
+            print("Reconnected to server")
+            return True
+        except (ConnectionError, HTTPError) as e:
+            print(f"Failed to connect to server, trying again in 5 seconds")
+            time.sleep(5)
+            continue
+        
 def connect_to_server(server_host, server_port, client_ip, client_port, client_id):
     try:
         payload = {'command': 'connect', 'port': client_port, 'ip': client_ip, 'id': client_id}
-        response = requests.post(f'http://{server_host}:{server_port}/announce', json=payload)
+        tracker_url = f'http://{server_host}:{server_port}/announce'
+        response = requests.post(tracker_url, json=payload)
         
         if response.ok:
             data = response.json()
@@ -27,7 +39,11 @@ def connect_to_server(server_host, server_port, client_ip, client_port, client_i
             print("Failed to connect to server:", response.status_code)
             print("Message:", data.get('message'))
         return True
-        
+    except (ConnectionError, HTTPError) as e:
+        print(f"Failed to connect to server: {e}")
+        reconnect_status = reconnect_to_server(tracker_url, payload)
+        if(reconnect_status == True):
+            return
     except Exception as e:
         print(f"An error occurred: {e}")
         return False
@@ -37,7 +53,8 @@ def disconnect_from_server(server_host, server_port, client_ip, client_port, cli
         # Prepare the payload with disconnect command
         payload = {'command': 'disconnect', 'ip': client_ip, 'port': client_port, 'id': client_id}
         # Send the POST request to the server's endpoint
-        response = requests.post(f'http://{server_host}:{server_port}/announce', json=payload)
+        tracker_url = f'http://{server_host}:{server_port}/announce'
+        response = requests.post(tracker_url, json=payload)
         
         if response.ok:
             # Parse the JSON response from the server
@@ -49,6 +66,11 @@ def disconnect_from_server(server_host, server_port, client_ip, client_port, cli
             # Handle non-200 responses
             print("Failed to disconnect:", response.status_code)
             print("Message:", data.get('message'))
+    except (ConnectionError, HTTPError) as e:
+        print(f"Failed to connect to server: {e}")
+        reconnect_status = reconnect_to_server(tracker_url, payload)
+        if(reconnect_status == True):
+            return
     except Exception as e:
         # Handle exceptions that may occur during the request
         print(f"An error occurred: {e}")
@@ -132,7 +154,8 @@ def upload_info_hash_to_tracker(server_host, server_port, client_ip, client_port
         }
         
         try:
-            response = requests.post(f'http://{server_host}:{server_port}/announce', json=data, headers=headers)
+            tracker_url = f'http://{server_host}:{server_port}/announce'
+            response = requests.post(tracker_url, json=data, headers=headers)
         
             if response.ok:
                 print(f"Uploaded torrent info for {filename} to tracker")
@@ -141,8 +164,10 @@ def upload_info_hash_to_tracker(server_host, server_port, client_ip, client_port
                 print("Failed to upload torrent info:", response.status_code)
                 print(response.text)
         except (ConnectionError, HTTPError) as e:
-            print(f"Failed to connect to tracker: {e}")
-            return
+            print(f"Failed to connect to server: {e}")
+            reconnect_status = reconnect_to_server(tracker_url, data)
+            if(reconnect_status == True):
+                return
     except Exception as e:
         print(f"An error occurred: {e}")
 
@@ -185,27 +210,36 @@ def download_torrent(torrent_filename, client_ip, client_id):
                 return
             
         except (ConnectionError, HTTPError) as e:
-            print("Failed to contact tracker. Trying again in 5 seconds.")
-            time.sleep(5)
-            continue
+            print(f"Failed to connect to server: {e}")
+            reconnect_status = reconnect_to_server(tracker_url, payload)
+            if(reconnect_status == True):
+                return
         
         number_of_peers = len(data['peers'])
         while number_of_peers == 0:
             print("No peers found. Trying again in 5 seconds.")
             time.sleep(5)
-            response = requests.post(f'{tracker_url}', json=payload)
-            if response.ok:
-                data = response.json()
-                if data['status'] == 'success':
-                    print("Peers holding the file:", data['peers'])
-                    number_of_peers = len(data['peers'])
+            try:
+                response = requests.post(f'{tracker_url}', json=payload)
+                if response.ok:
+                    data = response.json()
+                    if data['status'] == 'success':
+                        print("Peers holding the file:", data['peers'])
+                        number_of_peers = len(data['peers'])
+                    else:
+                        print("No peers found or error:", data['message'])
                 else:
-                    print("No peers found or error:", data['message'])
-            else:
-                print("Failed to contact tracker:", response.status_code)
+                    print("Failed to contact tracker:", response.status_code)
+            except (ConnectionError, HTTPError) as e:
+                print(f"Failed to connect to server: {e}")
+                reconnect_status = reconnect_to_server(tracker_url, payload)
+                if(reconnect_status == True):
+                    return
 
+        if(peer_idx >= number_of_peers):
+            peer_idx = 0
         seeder_ip, seeder_port, seeder_id = data['peers'][peer_idx]['ip'], int(data['peers'][peer_idx]['port']), int(data['peers'][peer_idx]['id'])
-        
+
         client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             client_socket.connect((seeder_ip, seeder_port))
@@ -217,7 +251,7 @@ def download_torrent(torrent_filename, client_ip, client_id):
                 peer_idx = 0
             time.sleep(5)
             continue
-            
+        
         peer_idx += 1
         if(peer_idx == number_of_peers):
             peer_idx = 0
@@ -321,7 +355,6 @@ def main(SERVER_HOST, SERVER_PORT, CLIENT_IP, CLIENT_PORT, CLIENT_ID):
             connect_to_server(SERVER_HOST, SERVER_PORT, CLIENT_IP, CLIENT_PORT, CLIENT_ID)
         if(command == "disconnect"):
             disconnect_from_server(SERVER_HOST, SERVER_PORT, CLIENT_IP, CLIENT_PORT, CLIENT_ID)
-            break
         elif(command == "upload"):
             FILENAME = input("Enter the filename to seed: ")
             upload_info_hash_to_tracker(SERVER_HOST, SERVER_PORT, CLIENT_IP, CLIENT_PORT, CLIENT_ID, FILENAME)
