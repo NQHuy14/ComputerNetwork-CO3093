@@ -8,6 +8,7 @@ import time
 from tqdm import tqdm
 from encode import bencode, bdecode
 from threading import Thread
+from requests.exceptions import ConnectionError, HTTPError
 
 files = [] # This dictionary should contain piece index to data mapping
 pieces_have = [] # This list should contain the indexes of the pieces that the client has
@@ -25,9 +26,11 @@ def connect_to_server(server_host, server_port, client_ip, client_port, client_i
             data = response.json()
             print("Failed to connect to server:", response.status_code)
             print("Message:", data.get('message'))
+        return True
         
     except Exception as e:
         print(f"An error occurred: {e}")
+        return False
 
 def disconnect_from_server(server_host, server_port, client_ip, client_port, client_id):
     try:
@@ -128,14 +131,18 @@ def upload_info_hash_to_tracker(server_host, server_port, client_ip, client_port
             'info_hash': hashlib.sha1(bencoded_info).hexdigest()
         }
         
-        response = requests.post(f'http://{server_host}:{server_port}/announce', json=data, headers=headers)
+        try:
+            response = requests.post(f'http://{server_host}:{server_port}/announce', json=data, headers=headers)
         
-        if response.ok:
-            print(f"Uploaded torrent info for {filename} to tracker")
-            print("Received from server:", response.json())
-        else:
-            print("Failed to upload torrent info:", response.status_code)
-            print(response.text)
+            if response.ok:
+                print(f"Uploaded torrent info for {filename} to tracker")
+                print("Received from server:", response.json())
+            else:
+                print("Failed to upload torrent info:", response.status_code)
+                print(response.text)
+        except (ConnectionError, HTTPError) as e:
+            print(f"Failed to connect to tracker: {e}")
+            return
     except Exception as e:
         print(f"An error occurred: {e}")
 
@@ -156,30 +163,61 @@ def download_torrent(torrent_filename, client_ip, client_id):
     
     validated_pieces = [None] * num_pieces
     peer_idx = 0
-    
-    for i in range(num_pieces):
+    i = 0
+    while i < num_pieces:
         # Contact the tracker to get peers
         payload = {
             'command': 'get_peers',
             'info_hash': info_hash
         }
-        response = requests.post(f'{tracker_url}', json=payload)
-        if response.ok:
-            data = response.json()
-            if data['status'] == 'success':
-                print("Peers holding the file:", data['peers'])
+        try:
+            response = requests.post(f'{tracker_url}', json=payload)
+            if response.ok:
+                data = response.json()
+                if data['status'] == 'success':
+                    print("Peers holding the file:", data['peers'])
+                else:
+                    print("No peers found or error:", data['message'])
+                    break
             else:
-                print("No peers found or error:", data['message'])
-                break
-        else:
-            print("Failed to contact tracker:", response.status_code)
-            break
+                print("Failed to contact tracker:", response.status_code)
+                print("Tracker recover, ask seeder connect again.")
+                return
+            
+        except (ConnectionError, HTTPError) as e:
+            print("Failed to contact tracker. Trying again in 5 seconds.")
+            time.sleep(5)
+            continue
         
         number_of_peers = len(data['peers'])
+        while number_of_peers == 0:
+            print("No peers found. Trying again in 5 seconds.")
+            time.sleep(5)
+            response = requests.post(f'{tracker_url}', json=payload)
+            if response.ok:
+                data = response.json()
+                if data['status'] == 'success':
+                    print("Peers holding the file:", data['peers'])
+                    number_of_peers = len(data['peers'])
+                else:
+                    print("No peers found or error:", data['message'])
+            else:
+                print("Failed to contact tracker:", response.status_code)
+
         seeder_ip, seeder_port, seeder_id = data['peers'][peer_idx]['ip'], int(data['peers'][peer_idx]['port']), int(data['peers'][peer_idx]['id'])
         
         client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        client_socket.connect((seeder_ip, seeder_port))
+        try:
+            client_socket.connect((seeder_ip, seeder_port))
+        except ConnectionRefusedError:
+            print(f"Failed to connect to {seeder_ip}:{seeder_port}, trying next peer if available.")
+            
+            peer_idx += 1
+            if(peer_idx == number_of_peers):
+                peer_idx = 0
+            time.sleep(5)
+            continue
+            
         peer_idx += 1
         if(peer_idx == number_of_peers):
             peer_idx = 0
@@ -190,13 +228,14 @@ def download_torrent(torrent_filename, client_ip, client_id):
         if hashlib.sha1(piece).digest() == piece_hash:
             print(f"Received and validated piece {i} from {seeder_ip}:{seeder_port}")
             validated_pieces[i] = piece
+            i = i + 1
         else:
             print(f"Piece {i} is corrupted")
-            client_socket.send(f"get_piece {i} of {filename} at_peer {seeder_id} {client_ip}\n".encode())
+            continue
         
         client_socket.shutdown(socket.SHUT_RDWR)
         client_socket.close()
-        # time.sleep(0.5)
+        time.sleep(5)
     
     #Create directory if not exists
     directory = "peer_" + str(client_id)
@@ -265,9 +304,6 @@ def start_seeder_server(ip, port):
 
     while True:
         client_socket, addr = server_socket.accept()
-        # message = client_socket.recv(1024).decode()
-        # client_ip = message.split()[1]
-        # client_port = int(message.split()[3])
         Thread(target=client_handler, args=(client_socket,), daemon=True).start()
 
 def start_leecher_server(torrent_filename, ip, id):
@@ -275,10 +311,14 @@ def start_leecher_server(torrent_filename, ip, id):
         Thread(target=download_torrent, args=(torrent_filename, ip, id), daemon=True).start()
 
 def main(SERVER_HOST, SERVER_PORT, CLIENT_IP, CLIENT_PORT, CLIENT_ID):
-    connect_to_server(SERVER_HOST, SERVER_PORT, CLIENT_IP, CLIENT_PORT, CLIENT_ID)
+    status = connect_to_server(SERVER_HOST, SERVER_PORT, CLIENT_IP, CLIENT_PORT, CLIENT_ID)
+    if status == False:
+        return
     
     while True:
         command = input("Enter a command (create torrent, upload, download, disconnect, seeder, exit): ")
+        if(command == "connect"):
+            connect_to_server(SERVER_HOST, SERVER_PORT, CLIENT_IP, CLIENT_PORT, CLIENT_ID)
         if(command == "disconnect"):
             disconnect_from_server(SERVER_HOST, SERVER_PORT, CLIENT_IP, CLIENT_PORT, CLIENT_ID)
             break

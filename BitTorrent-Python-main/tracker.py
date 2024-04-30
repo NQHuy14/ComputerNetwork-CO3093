@@ -56,6 +56,10 @@ def handle_disconnect(data):
         for peer in peers:
             if peer['ip'] == client_ip and peer['port'] == client_port:
                 peers.remove(peer)
+                for torrent in torrents:
+                    for peer_info in torrents[torrent]['peers']:
+                        if peer_info['ip'] == client_ip and peer_info['port'] == client_port:
+                            torrents[torrent]['peers'].remove(peer_info)
                 print(f"Peer {client_ip}, {client_port} has disconnected from server")
                 print("Current list of connected peers:")
                 for peer in peers:
