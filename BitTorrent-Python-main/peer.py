@@ -36,11 +36,11 @@ def connect_to_server(server_host, server_port, client_ip, client_port, client_i
             print("Message:", data.get('message'))
         else:
             data = response.json()
-            print("Failed to connect to server:", response.status_code)
+            print("Status:", response.status_code)
             print("Message:", data.get('message'))
         return True
     except (ConnectionError, HTTPError) as e:
-        print(f"Failed to connect to server: {e}")
+        print(f"Failed to connect to server")
         reconnect_status = reconnect_to_server(tracker_url, payload)
         if(reconnect_status == True):
             return
@@ -67,7 +67,7 @@ def disconnect_from_server(server_host, server_port, client_ip, client_port, cli
             print("Failed to disconnect:", response.status_code)
             print("Message:", data.get('message'))
     except (ConnectionError, HTTPError) as e:
-        print(f"Failed to connect to server: {e}")
+        print(f"Failed to connect to server")
         reconnect_status = reconnect_to_server(tracker_url, payload)
         if(reconnect_status == True):
             return
@@ -164,7 +164,7 @@ def upload_info_hash_to_tracker(server_host, server_port, client_ip, client_port
                 print("Failed to upload torrent info:", response.status_code)
                 print(response.text)
         except (ConnectionError, HTTPError) as e:
-            print(f"Failed to connect to server: {e}")
+            print(f"Failed to connect to server")
             reconnect_status = reconnect_to_server(tracker_url, data)
             if(reconnect_status == True):
                 return
@@ -175,6 +175,11 @@ def download_torrent(torrent_filename, client_ip, client_id):
     # Decode the torrent file
     dir = "peer_" + str(client_id)
     full_output_path = dir + "/" + torrent_filename
+    
+    if not os.path.exists(full_output_path):
+        print("You don't have the torrent file in the directory!")
+        return
+    
     with open(full_output_path, 'rb') as file:
         torrent_data = bdecode(file.read())
         tracker_url = torrent_data['announce']
@@ -269,7 +274,7 @@ def download_torrent(torrent_filename, client_ip, client_id):
         
         client_socket.shutdown(socket.SHUT_RDWR)
         client_socket.close()
-        time.sleep(5)
+        time.sleep(1)
     
     #Create directory if not exists
     directory = "peer_" + str(client_id)
@@ -324,7 +329,7 @@ def start_seeder_server(ip, port):
                 else:
                     print("No valid request received.")
                     return
-                    
+
         except socket.error as e:
             print("Socket error:", e)
             client_socket.close()
